@@ -29,8 +29,6 @@ Les paquets au CRC invalide sont ignorés, pour éviter les fausses détections.
 
 Attendre passivement peut être long : un répéteur n'émet que lorsqu'il relaie du trafic ou envoie ses annonces périodiques. Un appui sur le bouton envoie donc un paquet **TRACE** (le mécanisme natif de MeshCore pour tracer un chemin) en *zéro saut* vers le répéteur. Le sketch mémorise le tag aléatoire de la requête et ne retient la réponse que si elle revient avec le même tag, dans les 10 secondes.
 
-> ⚠️ Le ping est la partie la plus expérimentale : la réponse dépend de la version du firmware du répéteur et de sa configuration. S'il ne répond pas, l'écoute passive (annonces et trafic relayé) fonctionne quand même.
-
 ---
 
 ## Ce qu'il vous faut
