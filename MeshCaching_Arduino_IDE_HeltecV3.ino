@@ -1,5 +1,5 @@
 /**
- * @file    MeshCaching-Arduino-IDE-Heltec-V3.ino
+ * @file    MeshCaching_Arduino_IDE_HeltecV3ino
  * @brief   Géolocalisation d'un répéteur Meshcore
  *
  * @details Affiche le RSSI (niveau de signal) et le temps écoulé depuis la
@@ -48,6 +48,16 @@
 const uint8_t TARGET_PUBKEY_PREFIX[] = { 0xE0, 0xB6 };
 //const uint8_t TARGET_PUBKEY_PREFIX[] = { 0x57, 0xDB };
 #define TARGET_PUBKEY_PREFIX_LEN (sizeof(TARGET_PUBKEY_PREFIX))
+
+// Detection des paquets FLOOD retransmis par le repeteur (identifies par le
+// dernier hash du chemin, d'un seul octet en general).
+//   1 = actif  : mises a jour frequentes, mais un AUTRE repeteur dont la cle
+//                publique commence par le meme octet peut etre confondu
+//                avec la cible (1 chance sur 256).
+//   0 = inactif : on ne retient que les ANNONCES du repeteur (cle publique
+//                complete, aucune ambiguite) et les reponses a notre ping.
+//                Detection plus rare, mais sans aucune fausse alerte.
+#define ACCEPT_RELAYED_FLOOD 1
 
 // =====================================================================
 // 3) FORMAT DE PAQUET MESHCORE (doc officielle meshcore-dev/MeshCore)
@@ -259,14 +269,34 @@ void sendTracePing() {
 // =====================================================================
 // 8) DECODAGE DU PAQUET MESHCORE
 // =====================================================================
-// Cette fonction cherche l'identifiant (hash de cle publique) du DERNIER
-// noeud qui a retransmis le paquet, et le compare au prefixe du repeteur
-// que l'on surveille. Elle renvoie true si ca correspond.
+// Determine si le paquet a ete EMIS par le repeteur cible : c'est SON signal
+// dont on veut afficher le RSSI. On ne retient donc un paquet que si son
+// emetteur est identifiable avec certitude. Il n'y a que trois cas :
+//
+//  1. Reponse a notre ping TRACE : reconnue par son tag aleatoire.
+//  2. ANNONCE (advert) sans saut : le payload commence par la cle publique
+//     complete de l'emetteur, qui est forcement celui qui vient d'emettre.
+//  3. Paquet FLOOD retransmis (au moins un saut) : chaque repeteur ajoute son
+//     hash a la fin du chemin avant de retransmettre, donc le DERNIER hash est
+//     le dernier repeteur qui a emis le paquet. (Voir ACCEPT_RELAYED_FLOOD.)
+//
+// Tout le reste est REFUSE, car l'emetteur n'est pas identifiable :
+//  - Paquets en route DIRECT : le chemin contient les sauts qu'il RESTE a
+//    faire (path[0] = prochain saut, dernier = destination finale), pas
+//    l'emetteur. Un paquet destine "via" le repeteur ne vient pas de lui.
+//  - Premier octet du payload : ce n'est PAS le hash de l'emetteur. Pour
+//    REQ / RESPONSE / TXT_MSG / PATH c'est le hash du DESTINATAIRE (l'emetteur
+//    vient ensuite), pour GRP_TXT le hash du canal, pour ACK un bout de CRC.
+//    Un message ADRESSE au repeteur (ex. requete d'un smartphone) etait donc
+//    pris a tort pour un paquet emis par lui.
+//  - Messages de groupe, ACK, etc. : l'emetteur n'y figure pas du tout.
 //
 // Rappel du format d'un paquet MeshCore :
 //   [header 1 octet] [transport_codes 0 ou 4 octets] [path_length 1 octet]
 //   [path 0-64 octets] [payload 0-184 octets]
-bool packetComesFromTarget(const uint8_t *packet, size_t len) {
+//
+// "why" (optionnel) recoit la raison de la detection, pour le moniteur serie.
+bool packetComesFromTarget(const uint8_t *packet, size_t len, const char **why) {
   if (len < 2) return false;
 
   uint8_t header = packet[0];
@@ -294,40 +324,45 @@ bool packetComesFromTarget(const uint8_t *packet, size_t len) {
   const uint8_t *payload = packet + offset;
   size_t payloadLen = len - offset;
 
-  // Cas particulier : un paquet TRACE ne contient PAS de hash en tete de
-  // payload (contrairement aux messages REQ/RESPONSE/TXT). Il commence par
-  // un tag aleatoire de 4 octets. On ne peut donc pas le reconnaitre par
-  // hash : on compare son tag a celui de notre dernier ping envoye.
+  // --- Cas 1 : reponse a notre TRACE ---
+  // Un paquet TRACE ne contient PAS de hash en tete de payload : il commence
+  // par un tag aleatoire de 4 octets. On compare son tag a celui de notre
+  // dernier ping envoye.
   if (payloadType == PAYLOAD_TYPE_TRACE) {
     if (payloadLen < 4 || lastSentTag == 0) return false;
     if (millis() - lastPingMs > TRACE_REPLY_TIMEOUT_MS) return false;
 
     uint32_t receivedTag;
     memcpy(&receivedTag, payload, sizeof(receivedTag));
-    return receivedTag == lastSentTag;
+    if (receivedTag != lastSentTag) return false;
+    if (why) *why = "reponse TRACE";
+    return true;
   }
 
-  // Identifiant du dernier "sauteur" a comparer au repeteur cible
-  const uint8_t *lastHopId = nullptr;
-  size_t lastHopIdLen = hashSize;
-
-  if (hopCount >= 1) {
-    // Cas normal : le dernier hash du chemin est le dernier repeteur traverse
-    lastHopId = pathBytes + (size_t)(hopCount - 1) * hashSize;
-  } else if (payloadType == PAYLOAD_TYPE_ADVERT && payloadLen >= ADVERT_PUBKEY_LEN) {
-    // Annonce sans saut : la cle publique complete de l'emetteur est en tete du payload
-    lastHopId = payload;
-    lastHopIdLen = ADVERT_PUBKEY_LEN;
-  } else if (payloadLen >= 1) {
-    // Paquet direct sans saut : le premier octet du payload est le hash source
-    lastHopId = payload;
-    lastHopIdLen = 1;
+  // --- Cas 2 : annonce sans saut (peu importe la route : une annonce "zero-hop"
+  //     est emise avec un chemin vide, et personne ne l'a retransmise) ---
+  if (payloadType == PAYLOAD_TYPE_ADVERT && hopCount == 0) {
+    if (payloadLen < ADVERT_PUBKEY_LEN) return false;
+    // Comparaison sur TOUT le prefixe configure (cle complete cote paquet)
+    if (memcmp(payload, TARGET_PUBKEY_PREFIX, TARGET_PUBKEY_PREFIX_LEN) != 0) return false;
+    if (why) *why = "annonce";
+    return true;
   }
 
-  if (lastHopId == nullptr) return false;
+  // --- Cas 3 : paquet FLOOD retransmis, dernier hash du chemin = dernier emetteur ---
+#if ACCEPT_RELAYED_FLOOD
+  bool isFlood = (routeType == ROUTE_TYPE_FLOOD || routeType == ROUTE_TYPE_TRANSPORT_FLOOD);
+  if (isFlood && hopCount >= 1) {
+    const uint8_t *lastHopId = pathBytes + (size_t)(hopCount - 1) * hashSize;
+    size_t compareLen = min((size_t)hashSize, (size_t)TARGET_PUBKEY_PREFIX_LEN);
+    if (memcmp(lastHopId, TARGET_PUBKEY_PREFIX, compareLen) != 0) return false;
+    if (why) *why = "relais flood";
+    return true;
+  }
+#endif
 
-  size_t compareLen = min(lastHopIdLen, (size_t)TARGET_PUBKEY_PREFIX_LEN);
-  return memcmp(lastHopId, TARGET_PUBKEY_PREFIX, compareLen) == 0;
+  // Tout le reste : emetteur non identifiable, on ne retient pas.
+  return false;
 }
 
 // =====================================================================
@@ -357,10 +392,16 @@ void handleIncomingPacket() {
     return;
   }
 
-  bool isTarget = packetComesFromTarget(buf, len);
+  const char *why = "";
+  bool isTarget = packetComesFromTarget(buf, len, &why);
 
-  Serial.printf("Paquet recu : len=%u RSSI=%.1f dBm SNR=%.1f dB %s\n",
-                (unsigned)len, rssi, snr, isTarget ? "[REPETEUR CIBLE]" : "");
+  if (isTarget) {
+    Serial.printf("Paquet recu : len=%u RSSI=%.1f dBm SNR=%.1f dB [REPETEUR CIBLE : %s]\n",
+                  (unsigned)len, rssi, snr, why);
+  } else {
+    Serial.printf("Paquet recu : len=%u RSSI=%.1f dBm SNR=%.1f dB (ignore)\n",
+                  (unsigned)len, rssi, snr);
+  }
 
   if (isTarget) {
     targetStatus.hasPacket = true;
@@ -408,7 +449,7 @@ void loop() {
 
   // Appui sur le bouton PRG : on force un ping TRACE vers le repeteur cible,
   // au lieu d'attendre passivement son prochain paquet.
-  // Temporiation de 10 secondes avant d'envoyer le prochaine message
+  // Temporiation de 5 secondes avant d'envoyer le prochain message
   // afin de respecter la limite du duty cycle
   static unsigned long lastButtonPress = 0;
   if (digitalRead(BUTTON_PIN) == LOW && millis() - lastButtonPress > 5000) {
