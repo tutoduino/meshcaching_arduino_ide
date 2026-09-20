@@ -4,7 +4,7 @@ Deux sketches Arduino qui transforment une carte LoRa en **chercheur de répéte
 
 | Carte | Sketch | Écran | Microcontrôleur |
 |---|---|---|---|
-| **Heltec WiFi LoRa 32 V3** | [`rssi-meshcore-repeater/`](rssi-meshcore-repeater/) | OLED SSD1306 128×64 | ESP32-S3 |
+| **Heltec WiFi LoRa 32 V3** | [`rssi-meshcore-repeater/`](rssi-meshcore-repeater-heltecv3/) | OLED SSD1306 128×64 | ESP32-S3 |
 | **LilyGO T-Echo** | [`rssi-meshcore-repeater-techo/`](rssi-meshcore-repeater-techo/) | e-paper 1,54" 200×200 | nRF52840 |
 
 Les deux sketches partagent la même logique (décodage des paquets MeshCore, comparaison avec le répéteur cible). Seuls le brochage, l'écran et quelques appels spécifiques au microcontrôleur diffèrent.
