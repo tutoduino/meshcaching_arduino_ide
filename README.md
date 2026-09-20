@@ -80,11 +80,6 @@ Dans le fichier `.ino`, modifier la ligne :
 ```cpp
 const uint8_t TARGET_PUBKEY_PREFIX[] = { 0xE0, 0xB6 };
 ```
-
-Le premier octet est utilisé pour le ping et pour comparer les hash de chemin (souvent d'un seul octet). Le second octet ne sert qu'à départager les annonces, qui contiennent la clé complète.
-
-> **Collisions possibles** : un hash d'un seul octet ne compte que 256 valeurs. Dans une zone dense, un autre répéteur peut partager le même premier octet et provoquer une fausse détection. Les annonces sans saut (clé complète) sont plus fiables : à privilégier si vous avez un doute.
-
 ### 3. Vérifier les paramètres radio
 
 Les valeurs par défaut correspondent au réseau MeshCore **Île-de-France** (preset « EU/UK narrow ») :
