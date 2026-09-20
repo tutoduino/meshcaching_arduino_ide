@@ -1,5 +1,5 @@
 /**
- * @file    MeshCaching_Arduino_IDE_HeltecV3ino
+ * @file    MeshCaching_Arduino_IDE_HeltecV3.ino
  * @brief   Géolocalisation d'un répéteur Meshcore
  *
  * @details Affiche le RSSI (niveau de signal) et le temps écoulé depuis la
