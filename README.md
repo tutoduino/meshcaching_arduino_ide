@@ -9,8 +9,6 @@ Deux sketches Arduino qui transforment une carte LoRa en **chercheur de répéte
 
 Les deux sketches partagent la même logique (décodage des paquets MeshCore, comparaison avec le répéteur cible). Seuls le brochage, l'écran et quelques appels spécifiques au microcontrôleur diffèrent.
 
-> **Statut** : la version Heltec V3 est le sketch d'origine (TutoDuino), corrigé pour ne plus afficher le RSSI de paquets qui ne viennent pas du répéteur (voir [Historique](#historique-des-changements)). La version T-Echo en est un portage, avec la même correction : à valider sur votre matériel (voir [Dépannage](#dépannage)).
-
 ---
 
 ## Principe de fonctionnement
