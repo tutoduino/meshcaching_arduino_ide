@@ -1,5 +1,5 @@
 /**
- * @file    MeshCaching_Arduino_IDE_LilygoTEcho.ino
+ * @file    MeshCaching-Arduino-IDE-LilygoTEcho.ino
  * @brief   Geolocalisation d'un repeteur Meshcore (version LilyGO T-Echo)
  *
  * @details Affiche le RSSI (niveau de signal) et le temps ecoule depuis la
@@ -52,7 +52,11 @@
 #define EPD_ROTATION 3  // passer a 1 si l'affichage apparait a l'envers
 
 // --- Alimentation des peripheriques (equivalent du "Vext" du Heltec, actif a l'etat HAUT) ---
-#define VEXT_PIN PINNUM(0, 12)
+// Le T-Echo a DEUX broches d'alimentation ("Power_Enable" et "Power_On" dans les
+// exemples LilyGO) : les deux doivent etre a l'etat haut, sinon la radio n'est
+// pas alimentee (l'ecran, lui, peut fonctionner avec la premiere seule).
+#define VEXT_PIN PINNUM(0, 12)      // alimentation generale
+#define PERIPH_PWR_PIN PINNUM(0, 13)  // alimentation des peripheriques (radio...)
 
 // --- LED (actives a l'etat BAS sur le T-Echo) ---
 #define LED_GREEN_PIN PINNUM(1, 1)
@@ -78,8 +82,9 @@
 
 // !! A ADAPTER : prefixe de la cle publique du repeteur MeshCore vise.
 //const uint8_t TARGET_PUBKEY_PREFIX[] = { 0xC6, 0xF1 };
-const uint8_t TARGET_PUBKEY_PREFIX[] = { 0xE0, 0xB6 };
-//const uint8_t TARGET_PUBKEY_PREFIX[] = { 0x57, 0xDB };
+//const uint8_t TARGET_PUBKEY_PREFIX[] = { 0xE0, 0xB6 };
+// const uint8_t TARGET_PUBKEY_PREFIX[] = { 0x87, 0x7d };
+const uint8_t TARGET_PUBKEY_PREFIX[] = { 0x57, 0xDB };
 #define TARGET_PUBKEY_PREFIX_LEN (sizeof(TARGET_PUBKEY_PREFIX))
 
 // Detection des paquets FLOOD retransmis par le repeteur (identifies par le
@@ -133,9 +138,10 @@ unsigned long lastPingMs = 0;
 #define DISPLAY_REFRESH_MS 10000UL
 #define FULL_REFRESH_EVERY 30  // un rafraichissement complet (anti-ghosting) tous les N partiels
 
-// Deux bus SPI distincts : un pour la radio, un pour l'ecran.
-SPIClass loraSPI(NRF_SPIM2, LORA_MISO_PIN, LORA_SCK_PIN, LORA_MOSI_PIN);
-SPIClass epdSPI(NRF_SPIM3, EPD_MISO_PIN, EPD_SCK_PIN, EPD_MOSI_PIN);
+// Deux bus SPI distincts : un pour l'ecran (SPIM2), un pour la radio (SPIM3).
+// (meme attribution que dans les exemples T-Echo eprouves)
+SPIClass epdSPI(NRF_SPIM2, EPD_MISO_PIN, EPD_SCK_PIN, EPD_MOSI_PIN);
+SPIClass loraSPI(NRF_SPIM3, LORA_MISO_PIN, LORA_SCK_PIN, LORA_MOSI_PIN);
 
 SX1262 lora = new Module(LORA_CS_PIN, LORA_DIO1_PIN, LORA_RST_PIN, LORA_BUSY_PIN, loraSPI);
 GxEPD2_BW<GxEPD2_154_D67, GxEPD2_154_D67::HEIGHT> display(
@@ -283,6 +289,8 @@ void initBoard() {
   // Alimentation des peripheriques (radio, ecran...) : actif a l'etat haut
   pinMode(VEXT_PIN, OUTPUT);
   digitalWrite(VEXT_PIN, HIGH);
+  pinMode(PERIPH_PWR_PIN, OUTPUT);
+  digitalWrite(PERIPH_PWR_PIN, HIGH);
 
   pinMode(LED_GREEN_PIN, OUTPUT);
   pinMode(LED_RED_PIN, OUTPUT);
@@ -307,18 +315,38 @@ void initDisplay() {
 
 void initRadio() {
   Serial.println(F("Initialisation LoRa..."));
+  ledSet(LED_RED_PIN, true);  // LED rouge allumee pendant l'init de la radio
 
-  // Le bus SPI (loraSPI) est demarre par RadioLib dans begin().
+  // Demarrage explicite du bus SPI de la radio (RadioLib le fait aussi dans begin())
+  loraSPI.begin();
+
+  // ATTENTION : si la radio n'est pas detectee, RadioLib reessaie ~10 fois avec
+  // un delai a chaque essai : begin() peut mettre 10 a 20 s avant de rendre la main.
   int state = lora.begin(LORA_FREQ_MHZ, LORA_BW_KHZ, LORA_SF, LORA_CR,
                          RADIOLIB_SX126X_SYNC_WORD_PRIVATE, LORA_TX_POWER,
                          LORA_PREAMBLE_LEN, LORA_TCXO_VOLTAGE);
+
+  Serial.print(F("sortie de lora.begin, state = "));
+  Serial.println(state);
+
   if (state != RADIOLIB_ERR_NONE) {
-    serialPrintf("Erreur LoRa : %d\n", state);
     char code[16];
     snprintf(code, sizeof(code), "code %d", state);
     showMessage("Erreur LoRa", code);
-    while (true) { delay(1000); }
+    // Le code d'erreur est repete chaque seconde : on le voit meme si le
+    // moniteur serie est ouvert apres le demarrage.
+    while (true) {
+      serialPrintf("Erreur LoRa : %d  (-2 = radio non detectee : alimentation ou brochage ; -705/-706/-707 = erreur SPI/commande)\n", state);
+      ledSet(LED_RED_PIN, true);
+      delay(500);
+      ledSet(LED_RED_PIN, false);
+      delay(500);
+    }
   }
+
+  ledSet(LED_RED_PIN, false);
+  Serial.println(F("LoRa OK"));
+  blinkLed(LED_GREEN_PIN, 2, 150);  // 2 flashs verts : radio initialisee
 
   // Le commutateur d'antenne du T-Echo est pilote par la broche DIO2 du SX1262
   lora.setDio2AsRfSwitch(true);
@@ -558,7 +586,7 @@ void setup() {
   randomSeed(NRF_FICR->DEVICEID[0] ^ NRF_FICR->DEVICEID[1] ^ micros());
 
   initDisplay();
-  showMessage("Initialisation", "...");
+  showMessage("Init radio", "patientez...");
 
   initRadio();
 
