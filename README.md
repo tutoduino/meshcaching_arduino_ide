@@ -479,4 +479,4 @@ Désormais, seuls sont retenus les paquets dont l'émetteur est établi (annonce
 
 ## Licence
 
-À définir par le propriétaire du dépôt.
+MIT
